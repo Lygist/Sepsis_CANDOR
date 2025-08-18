@@ -67,7 +67,7 @@ if __name__ == "__main__":
                         type=float, help='Future discount rate')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument('--epoch', type=int, default=10, help='total epochs')
-    parser.add_argument('--generate', type=int, default=1,
+    parser.add_argument('--generate', type=int, default=0,
                         help='Generate data or not. If 1 then invoke generate_instances function, if 0 then load data from before directly.')
     parser.add_argument('--softness', type=float, default=5,
                         help='softness of the DQN solver')

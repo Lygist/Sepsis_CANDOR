@@ -17,7 +17,7 @@ entrypoints
 future
 gast
 grpcio
--e git+https://github.com/openai/gym.git@39ce693cce275e61751c8cad0ad8b6496029601f#egg=gym
+gym
 h5py
 html5lib
 idna
@@ -79,7 +79,7 @@ six
 stevedore
 tensorboard
 tensorflow-macos==2.11
-# tensorflow==2.11
+# tensorflow==2.10.0
 termcolor
 terminado
 testpath

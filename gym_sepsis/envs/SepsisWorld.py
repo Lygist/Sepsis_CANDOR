@@ -120,7 +120,7 @@ class SepsisWorld(gym.Env):
 
     def _get_action_onehot(self, action):
         if not torch.is_tensor(action):
-            action = torch.tensor(action)
+            action = torch.tensor([action], dtype=torch.long)
         action_onehot = torch.nn.functional.one_hot(action, num_classes=self.NUM_PATIENTS * NUM_ACTIONS).flatten()
         return action_onehot
 
