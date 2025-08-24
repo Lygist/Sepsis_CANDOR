@@ -108,7 +108,8 @@ def generate_instances(
     num_targets = NUM_PATIENTS
     target_size = 2624400
 
-    policy_kwargs = {'softness': softness, 'net_arch': [64, 64], 'activation_fn': torch.nn.ReLU, 'squash_output': False, 'scale': 1}
+    policy_kwargs = {'softness': softness, 'net_arch': [32, 32], 'activation_fn': torch.nn.ReLU,
+                     'squash_output': False, 'scale': 1}
 
     # channel_size_list = [label_size, 64, 64, feature_size]
     channel_size_list = [target_size + noise_dimensions, 64, 64, feature_size]
@@ -123,16 +124,17 @@ def generate_instances(
         # Add feature space noise and generate features
         if noise_dimensions > 0:
             noisy_transition_prob = torch.cat(
-                [transition_prob.view(num_targets, target_size), torch.normal(0, 1, (num_targets, noise_dimensions))], dim=1)
+                [transition_prob.view(num_targets, target_size),
+                 torch.normal(0, 1, (num_targets, noise_dimensions))], dim=1)
             feature = mlp(noisy_transition_prob.view(num_targets, target_size + noise_dimensions)).detach()
         else:
             feature = mlp(transition_prob.view(num_targets, target_size)).detach()
 
         # Solve for a good policy
         # TODO: Reset parameter values
-        model = DQN('MlpPolicy', env, learning_starts=1000, learning_rate=0.0001, target_update_interval=1000,
+        model = DQN('MlpPolicy', env, learning_starts=200, learning_rate=0.0005, target_update_interval=2000,
                     policy_kwargs=policy_kwargs, verbose=2, gamma=discount, strict=False, seed=seed, device=device)
-        model.learn(total_timesteps=10000, log_interval=100)
+        model.learn(total_timesteps=500, log_interval=100)
 
         # Generate trajectories using this policy
         obs = env.reset()
@@ -176,8 +178,7 @@ def generate_instances(
 
                     # Simulate cf: append cf_action to memory
                     env.memory[0].append(
-                        np.append(np.append(env.hidden_state[0].reshape((1, NUM_FEATURES - 2)), cf_action),
-                                  env.state_idx))
+                        np.append(np.append(env.hidden_state[0].reshape((1, NUM_FEATURES - 2)), cf_action), env.state_idx))
                     memory_array = np.expand_dims(env.memory[0], 0)
                     next_state_cf = env.state_model(tf.convert_to_tensor(memory_array[:, :, :-1], dtype=tf.float32),
                                                     training=False).numpy()
@@ -214,7 +215,7 @@ def generate_instances(
                 else:
                     cf_data[cf_action] = None  # No annotation for this cf_action
 
-            # Restore factual state after all cf (though not necessary since factual step already done)
+            # Restore factual state after all cf (though not necessary since the factual step is already done)
 
             trajectory.append((obs.detach(), action.detach(), reward, obs2.detach(), probs.detach(), cf_data))
             obs = obs2
