@@ -22,8 +22,8 @@ while len(original_trajectories) < NUM_TRAJECTORIES:
             break
     original_trajectories.append(trajectory)
     pbar.update(1)
-# with open("original_trajectories.pkl", "wb") as f:
-#     pickle.dump(original_trajectories, f)
+with open("original_trajectories.pkl", "wb") as f:
+    pickle.dump(original_trajectories, f)
 # print(f"Number of original trajectories: {len(original_trajectories)}")
 # print(f"Average length of trajectory: {sum([len(trajectory) for trajectory in original_trajectories]) / len(original_trajectories)}")
 
@@ -47,8 +47,8 @@ for original_trajectory in trajectories:
                 break
     perfect_counterfactual_trajectories.append(trajectory)
     pbar.update(1)
-# with open("perfect_counterfactual_trajectories.pkl", "wb") as f:
-#     pickle.dump(perfect_counterfactual_trajectories, f)
+with open("perfect_counterfactual_trajectories.pkl", "wb") as f:
+    pickle.dump(perfect_counterfactual_trajectories, f)
 # print(f"Number of counterfactual trajectories: {len(perfect_counterfactual_trajectories)}")
 # print(f"Average length of counterfactual trajectory: {sum([len(trajectory) for trajectory in perfect_counterfactual_trajectories]) / len(perfect_counterfactual_trajectories)}")
 
@@ -73,7 +73,7 @@ for original_trajectory in trajectories:
                 break
     imperfect_counterfactual_trajectories.append(trajectory)
     pbar.update(1)
-# with open("imperfect_counterfactual_trajectories.pkl", "wb") as f:
-#     pickle.dump(imperfect_counterfactual_trajectories, f)
+with open("imperfect_counterfactual_trajectories.pkl", "wb") as f:
+    pickle.dump(imperfect_counterfactual_trajectories, f)
 # print(f"Number of counterfactual trajectories: {len(imperfect_counterfactual_trajectories)}")
 # print(f"Average length of counterfactual trajectory: {sum([len(trajectory) for trajectory in imperfect_counterfactual_trajectories]) / len(imperfect_counterfactual_trajectories)}")
