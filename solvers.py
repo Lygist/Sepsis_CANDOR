@@ -7,8 +7,9 @@ from torchrl.data.replay_buffers import ReplayBuffer, LazyTensorStorage
 from stable_baselines3 import DQN
 from diffdqn_transition import compute_policy_hessian_inverse_vector_product
 from torchrl.envs import GymWrapper, TransformedEnv, DTypeCastTransform
-from torchrl.data import CompositeSpec, OneHot, LazyTensorStorage
-from torchrl.data.tensor_specs import MultiDiscreteTensorSpec
+from torchrl.data import CompositeSpec
+from torchrl.data.tensor_specs import MultiDiscreteTensorSpec, DiscreteTensorSpec
+
 import gym
 import copy
 
@@ -253,7 +254,7 @@ def DiffIQL(
             policy_actor = QValueActor(
                 module=actor,
                 in_keys=["observation"],
-                spec=OneHot(n=action_dim)
+                spec=DiscreteTensorSpec(n=action_dim)
             ).to(device)
 
             collector = SyncDataCollector(
