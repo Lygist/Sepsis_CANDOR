@@ -671,7 +671,7 @@ def seq_CANDOR(env, policy_kwargs, trajectories, discount=0.95, device='cpu', va
                 model.policy.load_from_vector(model_parameters)
                 model.policy.train()
 
-                N = len(trajectories)    # number of trajectories 500
+                N = len(trajectories)    # number of trajectories
                 T = len(trajectories[0]) # fixed time horizon 10
                 states = torch.cat([trajectories[n][t][0].view(1,-1) for n in range(N) for t in range(T)], dim=0)
                 actions = torch.cat([trajectories[n][t][1].view(1,-1) for n in range(N) for t in range(T)], dim=0).long()
@@ -679,7 +679,7 @@ def seq_CANDOR(env, policy_kwargs, trajectories, discount=0.95, device='cpu', va
                 probs_full = torch.cat([trajectories[n][t][4].view(1,-1) for n in range(N) for t in range(T)], dim=0) # probs of all actions [N*T, 25]
                 demonstrated_probs = torch.gather(probs_full, dim=1, index=actions).view(N,T)  # \pi_b(a_t | s_t)
 
-                # Evaluation probs and Q from solver
+                # Evaluation probs and Q from the solver
                 q_values, eval_probs = model.policy.q_net(states)  # \hat{Q}^+ [N*T, 25]
                 selected_eval_probs = torch.gather(eval_probs, dim=1, index=actions).view(N,T) # \pi_e(a_t | s_t)
                 rho = selected_eval_probs / demonstrated_probs  # \rho_t^{a_t}
