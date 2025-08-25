@@ -246,7 +246,7 @@ if __name__ == "__main__":
                         # Create D+ for prediction loss on prediction_traj
                         D_plus = create_D_plus(prediction_traj)
                         loss_fold = env_type.loss_fn(D_plus, prediction) - env_type.loss_fn(D_plus, label)
-                        loss_fold_list.append(loss_fold.detach().item())
+                        loss_fold_list.append(loss_fold)
 
                         if evaluated:
                             # new state version: reward_fn(new_s)
@@ -371,7 +371,7 @@ if __name__ == "__main__":
                             performance_eval = seq_CANDOR(env=real_env, policy_kwargs=policy_kwargs,
                                                           trajectories=ope_traj, discount=discount, device=device)
                             soft_evaluation = performance_eval(model_parameters)
-                            soft_eval_fold_list.append(soft_evaluation.detach().item())
+                            soft_eval_fold_list.append(soft_evaluation)
 
                             # -------------------- simulation ------------------
                             model = DQN("MlpPolicy", real_env, policy_kwargs=strict_policy_kwargs,
@@ -403,14 +403,14 @@ if __name__ == "__main__":
                                     'model': model_parameters.detach(), 'baseline': soft_evaluation.detach()}
 
                     # Average over folds after k-fold loop
-                    loss = sum(loss_fold_list) / len(loss_fold_list)
-                    loss_list.append(loss)
-                    soft_evaluation = sum(soft_eval_fold_list) / len(soft_eval_fold_list)
+                    loss = torch.mean(torch.stack(loss_fold_list))
+                    loss_list.append(loss.item())
+                    soft_evaluation = torch.mean(torch.stack(soft_eval_fold_list))
                     strict_evaluation = np.mean(strict_eval_fold_list)
                     rmse = np.mean(rmse_fold_list)
 
                     strict_evaluation_list.append(strict_evaluation)
-                    soft_evaluation_list.append(soft_evaluation)
+                    soft_evaluation_list.append(soft_evaluation.item())
                     rmse_list.append(rmse)
 
                     start_time = time.time()

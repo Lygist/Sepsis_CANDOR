@@ -691,7 +691,10 @@ def seq_CANDOR(env, policy_kwargs, trajectories, discount=0.95, device='cpu', va
                 V = torch.zeros((N, T+1))  # V[:, T] = 0
                 for t in range(T-1, -1, -1):
                     # sum_a \pi_e(a | s_t) \hat{Q}^+(s_t, a) per traj
-                    sum_pi_q = torch.sum(eval_probs[t*N:(t+1)*N] * q_values[t*N:(t+1)*N], dim=1)
+                    indices = torch.tensor([n * T + t for n in range(N)], device=states.device) # [N*T,]
+                    eval_probs_t = eval_probs[indices]
+                    q_values_t = q_values[indices]
+                    sum_pi_q = torch.sum(eval_probs_t * q_values_t, dim=1)
 
                     # \rho_t^{a_t} (r_t + \gamma \hat{V}^{H-t} - \hat{Q}^+(s_t, a_t)) per traj
                     rho_t = rho[:, t]
