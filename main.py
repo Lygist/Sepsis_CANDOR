@@ -129,6 +129,9 @@ if __name__ == "__main__":
     env_type = SepsisWorld
     data_file = args.patient_data
     solver_method = args.solver_method
+    NUM_ACTIONS = 25
+    NUM_BINS = 18
+    NUM_STATES = NUM_BINS ** 2
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -145,7 +148,7 @@ if __name__ == "__main__":
     generate_kwargs = {'env_type': env_type, 'NUM_PATIENTS': NUM_PATIENTS, 'EFFECT_SIZE': EFFECT_SIZE,
                        'discount': discount, 'sample_size': sample_size, 'num_trajectories': number_trajectories,
                        'seed': seed, 'softness': softness, 'demonstrate_softness': demonstrate_softness,
-                       'noise_fraction': noise, 'START_ADHERING': START_ADHERING, 'data_file': data_file,
+                       'START_ADHERING': START_ADHERING, 'data_file': data_file,
                        'cf_fraction': 0.3, 'cf_bias': 1, 'cf_noise_std': 0.5}
     data_path = f'cf_dataset_seed0_size10.pkl'
     if not generate and os.path.exists(data_path):
@@ -163,11 +166,11 @@ if __name__ == "__main__":
     # torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
     validate_loader = full_dataset[train_size + test_size:]
 
-    feature_size, label_size = info['feature size'], info['label size']
+    feature_size = info['feature size']
 
     # Set up the model to predict the reward function
     # channel_size_list = [feature_size, 1]
-    channel_size_list = [feature_size, 16, 2624400]
+    channel_size_list = [feature_size, 16, NUM_ACTIONS * NUM_STATES * NUM_STATES]
     net = MLP(channel_size_list=channel_size_list).to(device)
 
     # Learning rate and optimizer
@@ -193,7 +196,7 @@ if __name__ == "__main__":
     model_dict = {}
     replay_buffer_dict = {}
     kf = KFold(n_splits=2, shuffle=True, random_state=seed)
-    for epoch in range(-1, total_epoch):
+    for epoch in range(total_epoch):
         f_result = open(save_path, 'a')
         # ------------------------ training -------------------------------
         for mode, data_loader in [('train', train_loader), ('validate', validate_loader), ('test', test_loader)]:
@@ -218,16 +221,13 @@ if __name__ == "__main__":
                 evaluated = True
 
             with tqdm.tqdm(data_loader) as tqdm_loader:
-                for index, (data_id, NUM_PATIENTS, EFFECT_SIZE, feature, label, real_trajectories) in enumerate(tqdm_loader):
-                    feature, label = feature.to(device), label.to(device)
+                for index, (data_id, NUM_PATIENTS, EFFECT_SIZE, feature, real_trajectories) in enumerate(tqdm_loader):
+                    feature = feature.to(device)
                     # label = torch.clip(label + torch.normal(0, 0.1, prsize=label.shape), min=0, max=1) # adding random noise everytime
                     start_time = time.time()
-                    prediction_raw = net(feature.reshape(-1, feature_size)).view(label.shape)
+                    prediction_raw = net(feature.reshape(-1, feature_size)).view(1, 25, NUM_STATES, NUM_STATES)
                     prediction = prediction_raw / prediction_raw.sum(dim=-1).unsqueeze(-1)  # ensure predicted probabilities sum to 1
                     prediction_detach = prediction.detach()
-                    if epoch < 0:
-                        prediction = label.detach().clone()
-
                     # print(label.shape)
                     # print(prediction.shape)
 
@@ -245,24 +245,15 @@ if __name__ == "__main__":
 
                         # Create D+ for prediction loss on prediction_traj
                         D_plus = create_D_plus(prediction_traj)
-                        loss_fold = env_type.loss_fn(D_plus, prediction) - env_type.loss_fn(D_plus, label)
+                        loss_fold = env_type.loss_fn(D_plus, prediction)
                         loss_fold_list.append(loss_fold)
 
                         if evaluated:
                             # new state version: reward_fn(new_s)
-                            real_env = env_wrapper(transition_prob=prediction, true_transition_prob=label)
+                            real_env = env_wrapper(transition_prob=prediction, true_transition_prob=None)
 
                             # warm start
-                            if epoch < 0:  # or epoch == total_epoch - 1:
-                                model_parameters = None
-                                learning_starts = 1000
-                                min_num_iters = 10000
-                                load_replay_buffer = False
-                                save_replay_buffer = False
-                                dynamic_softness = softness
-                                verbose = 0
-                                baseline = 0
-                            elif data_id in model_dict:
+                            if data_id in model_dict:
                                 if warm_start:
                                     model_parameters = model_dict[data_id]['model']
                                 else:
