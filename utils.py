@@ -84,9 +84,6 @@ def generate_instances(
         demonstrate_softness=100,
         num_trajectories=100,
         seed=0,
-        noise_fraction=0,
-        feature_size=16,
-        noise_dimensions=0,
         START_ADHERING=1,
         data_file=None,
         cf_fraction=0,
@@ -100,41 +97,24 @@ def generate_instances(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    full_labels = []
-    full_features = []
     dataset = []
 
-    # Transition Matrix: (NUM_PATIENTS) * (NUM_ACTIONS=25 * NUM_STATES=18^2 * NUM_STATES=18^2)
-    num_targets = NUM_PATIENTS
-    target_size = 2624400
 
-    policy_kwargs = {'softness': softness, 'net_arch': [32, 32], 'activation_fn': torch.nn.ReLU,
-                     'squash_output': False, 'scale': 1}
-
-    # channel_size_list = [label_size, 64, 64, feature_size]
-    channel_size_list = [target_size + noise_dimensions, 64, 64, feature_size]
-    mlp = MLP(channel_size_list, activation='ReLU', last_activation='Linear')
-    mlp.eval()
+    policy_kwargs = {'softness': softness, 'net_arch': [64, 64], 'activation_fn': torch.nn.ReLU, 'squash_output': False, 'scale': 1}
 
     for sample_id in tqdm.tqdm(range(sample_size)):
         # Get T_matrices from data
         env = env_type(NUM_PATIENTS=NUM_PATIENTS, EFFECT_SIZE=EFFECT_SIZE, START_ADHERING=START_ADHERING, DATA_PATH=data_file)
-        transition_prob = env.true_patient_models.to(torch.float)
 
-        # Add feature space noise and generate features
-        if noise_dimensions > 0:
-            noisy_transition_prob = torch.cat(
-                [transition_prob.view(num_targets, target_size),
-                 torch.normal(0, 1, (num_targets, noise_dimensions))], dim=1)
-            feature = mlp(noisy_transition_prob.view(num_targets, target_size + noise_dimensions)).detach()
-        else:
-            feature = mlp(transition_prob.view(num_targets, target_size)).detach()
+        # Extract raw features from starting state (46 patient features except SOFA and Lactate)
+        env.reset()
+        raw_feature_array = np.delete(env.hidden_state[0].flatten(), [SOFA_IDX, LACTATE_IDX])  #46-2=44 features
+        feature = torch.tensor(raw_feature_array).float()
 
         # Solve for a good policy
-        # TODO: Reset parameter values
-        model = DQN('MlpPolicy', env, learning_starts=200, learning_rate=0.0005, target_update_interval=2000,
+        model = DQN('MlpPolicy', env, learning_starts=1000, learning_rate=0.0001, target_update_interval=1000,
                     policy_kwargs=policy_kwargs, verbose=2, gamma=discount, strict=False, seed=seed, device=device)
-        model.learn(total_timesteps=500, log_interval=100)
+        model.learn(total_timesteps=10000, log_interval=100)
 
         # Generate trajectories using this policy
         obs = env.reset()
@@ -178,7 +158,8 @@ def generate_instances(
 
                     # Simulate cf: append cf_action to memory
                     env.memory[0].append(
-                        np.append(np.append(env.hidden_state[0].reshape((1, NUM_FEATURES - 2)), cf_action), env.state_idx))
+                        np.append(np.append(env.hidden_state[0].reshape((1, NUM_FEATURES - 2)), cf_action),
+                                  env.state_idx))
                     memory_array = np.expand_dims(env.memory[0], 0)
                     next_state_cf = env.state_model(tf.convert_to_tensor(memory_array[:, :, :-1], dtype=tf.float32),
                                                     training=False).numpy()
@@ -213,9 +194,7 @@ def generate_instances(
                         'next_state': next_state_cf
                     }
                 else:
-                    cf_data[cf_action] = None  # No annotation for this cf_action
-
-            # Restore factual state after all cf (though not necessary since the factual step is already done)
+                    cf_data[cf_action] = None
 
             trajectory.append((obs.detach(), action.detach(), reward, obs2.detach(), probs.detach(), cf_data))
             obs = obs2
@@ -224,39 +203,21 @@ def generate_instances(
                 trajectories.append(trajectory)
                 trajectory = []
 
-        full_features.append(feature.view(1, -1, feature_size))
-        full_labels.append(transition_prob.flatten().view(1, -1, target_size))
-        dataset.append([sample_id, NUM_PATIENTS, EFFECT_SIZE, feature, transition_prob, trajectories])
 
-    full_labels = torch.cat(full_labels, dim=0)
-    full_features = torch.cat(full_features, dim=0)
-
-    if sample_size > 1:
-        feature_shape = full_features.shape
-        full_features = full_features.view(-1, feature_size)
-        full_features = (full_features - torch.mean(full_features, dim=0)) / (torch.std(full_features, dim=0) + 0.001)
-        full_features = full_features * (1 - noise_fraction) + torch.normal(0, 1, full_features.shape) * noise_fraction
-        full_features = (full_features - torch.mean(full_features, dim=0)) / (torch.std(full_features, dim=0) + 0.001)
-        full_features = full_features.view(feature_shape)
-
-    for i in range(len(dataset)):
-        dataset[i][3] = full_features[i]  # update features in dataset
+        dataset.append([sample_id, NUM_PATIENTS, EFFECT_SIZE, feature, trajectories])
 
     if cf_fraction > 0:
         with open(f'cf_dataset_seed{seed}_size{sample_size}.pkl', 'wb') as f:
-            pickle.dump((dataset, {'feature size': feature_size, 'label size': 1}), f)
+            pickle.dump((dataset, {'feature size': 44, 'label size': 1}), f)
         print(f"Saved dataset to cf_dataset_seed{seed}_size{sample_size}.pkl")
     else:
         with open(f'dataset_seed{seed}_size{sample_size}.pkl', 'wb') as f:
-            pickle.dump((dataset, {'feature size': feature_size, 'label size': 1}), f)
+            pickle.dump((dataset, {'feature size': 44, 'label size': 1}), f)
         print(f"Saved dataset to dataset_seed{seed}_size{sample_size}.pkl")
 
-    print('feature mean {}, std {}'.format(torch.mean(full_features.view(-1, feature_size), dim=0),
-                                           torch.std(full_features.view(-1, feature_size), dim=0)))
+    print('Finished generating training instances.')
 
-    print('Finished generating traning instances.')
-
-    return dataset, {'feature size': feature_size, 'label size': 1}
+    return dataset, {'feature size': 44}
 
 
 if __name__ == '__main__':
