@@ -6,6 +6,8 @@ import torch
 import tqdm
 import copy
 import time
+import os
+import csv
 
 from torch import nn
 
@@ -691,7 +693,7 @@ def seq_CANDOR(env, policy_kwargs, trajectories, discount=0.95, device='cpu', va
                 V = torch.zeros((N, T+1))  # V[:, T] = 0
                 for t in range(T-1, -1, -1):
                     # sum_a \pi_e(a | s_t) \hat{Q}^+(s_t, a) per traj
-                    indices = torch.tensor([n * T + t for n in range(N)], device=states.device) # [N*T,]
+                    indices = torch.tensor([n * T + t for n in range(N)], device=device) # [N*T,]
                     eval_probs_t = eval_probs[indices]
                     q_values_t = q_values[indices]
                     sum_pi_q = torch.sum(eval_probs_t * q_values_t, dim=1)
@@ -703,8 +705,16 @@ def seq_CANDOR(env, policy_kwargs, trajectories, discount=0.95, device='cpu', va
 
                     # V^{H-t+1} per traj
                     V[:, t] = sum_pi_q + correction
-
                 # Final value: avg initial V over N traj
+                print(f'solver policy:{selected_eval_probs}')
+                print(f'true policy:{demonstrated_probs}')
+                print(f'rho:{rho}')
+                print('components in Last time step:')
+                print(f'Q+:{q_values_t}')
+                print(f'rho_t: {rho_t}')
+                print(f'first term: {sum_pi_q}')
+                print(f'correction: {correction}')
+                print(f'ope:{V[:, t]}')
                 value = torch.mean(V[:, 0])
 
                 # Gradient

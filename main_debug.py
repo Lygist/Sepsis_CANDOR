@@ -167,7 +167,6 @@ if __name__ == "__main__":
     validate_loader = full_dataset[train_size + test_size:]
 
     feature_size = info['feature size']
-
     # Set up the model to predict the reward function
     # channel_size_list = [feature_size, 1]
     channel_size_list = [feature_size, 16, NUM_ACTIONS * NUM_STATES * NUM_STATES]
@@ -228,6 +227,7 @@ if __name__ == "__main__":
                     prediction_raw = net(feature.reshape(-1, feature_size)).view(1, 25, NUM_STATES, NUM_STATES)
                     prediction = prediction_raw / prediction_raw.sum(dim=-1).unsqueeze(-1)  # ensure predicted probabilities sum to 1
                     prediction_detach = prediction.detach()
+                    print(f'prediction mean is : {prediction_detach.mean()}, prediction std is: {prediction_detach.std()}')
                     # print(label.shape)
                     # print(prediction.shape)
 
@@ -421,7 +421,6 @@ if __name__ == "__main__":
                         # pdb.set_trace()
                         optimizer.zero_grad()
                         (-soft_evaluation + loss * regularization).backward()
-                        print(f'back_prop_loss: {(-soft_evaluation + loss * regularization)}')
                         for parameter in net.parameters():
                             print('norm:', torch.norm(parameter.grad))
                         if any([torch.isnan(parameter.grad).any() for parameter in net.parameters()]):
