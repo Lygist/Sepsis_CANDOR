@@ -13,22 +13,25 @@ from torch.nn import MSELoss
 
 def dm_plus_is(mlp, traj_ope, temp=5.0, device='cpu'):
     v_i_list = []
+    real_rewards = []
     mlp.eval()
     with torch.no_grad():
         for traj in traj_ope:
-            s = traj[0][0].float().to(device)  # state (scalar tensor, but view as [1])
-            a_i = traj[0][1].item()  # action
-            r_i = traj[0][2]  # reward
-            probs_full = traj[0][4]  # demonstrated probs (tensor [25])
-            # Compute hat_r for all actions
-            inputs = torch.cat([torch.cat((s.view(1, -1), one_hot(torch.tensor([a]), num_classes=25).float()), dim=1) for a in range(25)], dim=0).to(device)
-            hat_r = mlp(inputs).squeeze(1)  # [25]
+            s = traj[0][0].float().to(device)
+            a_i = traj[0][1].item()
+            r_i = traj[0][2]
+            probs_full = traj[0][4]
+            real_rewards.append(r_i)
+            inputs = torch.cat(
+                [torch.cat((s.view(1, -1), one_hot(torch.tensor([a]), num_classes=25).float()), dim=1) for a in
+                 range(25)], dim=0).to(device)
+            hat_r = mlp(inputs).squeeze(1)
             # pi_e: softmax(hat_r / temp)
             pi_e = torch.softmax(hat_r / temp, dim=0)
             # DM term: sum_a pi_e(a) hat_r(a)
             dm = torch.sum(pi_e * hat_r)
             # IS correction
-            pi_b_a_i = probs_full[0,a_i]
+            pi_b_a_i = probs_full[0, a_i]
             pi_e_a_i = pi_e[a_i]
             rho = pi_e_a_i / pi_b_a_i if pi_b_a_i > 1e-6 else 0.0  # avoid div by zero
             hat_r_a_i = hat_r[a_i]
@@ -36,7 +39,8 @@ def dm_plus_is(mlp, traj_ope, temp=5.0, device='cpu'):
             # v_i
             v_i = dm + correction
             v_i_list.append(v_i.item())
-    return v_i_list
+    return v_i_list, real_rewards
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate Bandit Training Data for Sepsis and Evaluate DM+-IS')
@@ -144,11 +148,12 @@ if __name__ == "__main__":
             epoch_loss += loss.item()
         print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss / len(D_plus)}")
 
-    # Evaluate DM+-IS on traj_ope
-    result = dm_plus_is(mlp, traj_ope, temp=1.0, device=device)
+    # Evaluate DM+-IS
+    ope_results, real_rewards = dm_plus_is(mlp, traj_ope, temp=1.0, device=device)
 
     # Save result
+    result_data = {'ope': ope_results, 'real': real_rewards}
     result_path = f'cf_bandit_results_seed{seed}_traj{number_trajectories}.pkl'
     with open(result_path, 'wb') as f:
-        pickle.dump(result, f)
+        pickle.dump(result_data, f)
     print(f"OPE results saved to {result_path}")
