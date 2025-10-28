@@ -20,6 +20,8 @@ TRAJ_LEN = 1  # bandit
 
 ANNOTATION_BUDGETS = [20, 40, 60, 80, 100]
 
+ALPHA_VALS = [0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+
 # ======================
 # Environment / policies
 # ======================
@@ -59,8 +61,8 @@ def _eval_with_annotations(rng, dataset, budget, means, stds):
         rng=rng,
     )[np.newaxis, ...]  # shape (1, batch, T, A)
 
-    cis_val = float(run_is_plus(PI_E, PI_B, dataset, annotations=ann)[0])
-    candor_val = float(run_dr(PI_E, PI_B, dataset, annotations=ann)[0])
+    cis_val = float(run_is_plus(PI_E, PI_B, dataset, annotations=ann))
+    candor_val = float(run_dr(PI_E, PI_B, dataset, annotations=ann))
 
     return cis_val, candor_val
 
@@ -75,6 +77,8 @@ def run_once(rng):
         cis_imperfect: (len(ANNOTATION_BUDGETS),) float
         candor_perfect: (len(ANNOTATION_BUDGETS),) float
         candor_imperfect: (len(ANNOTATION_BUDGETS),) float
+
+    UPDATE: Modified the shape of cis (NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS))
     """
     # Generate dataset under behavior policy using this run's RNG
     dataset = generate_dataset_of_trajectories(
@@ -88,41 +92,63 @@ def run_once(rng):
     )
 
     # Baselines (no annotations)
-    is_val = float(run_vanilla_is(PI_E, PI_B, dataset)[0])
-    dr_val = float(run_dr(PI_E, PI_B, dataset, annotations=None)[0])
+    is_val = float(run_vanilla_is(PI_E, PI_B, dataset))
+    dr_val = float(run_dr(PI_E, PI_B, dataset, annotations=None))
 
     # Imperfect annotation distribution (biased means, inflated stds)
     imperfect_means = REWARD_MEANS + IMP_ANNOT_BIAS
     imperfect_stds  = REWARD_STDS + IMP_ANNOT_STD_ADD
 
-    cis_perfect, cis_imperfect = [], []
-    candor_perfect, candor_imperfect = [], []
+    cis_perfect = np.zeros((len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
+    cis_imperfect = np.zeros((len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
 
+    candor_perfect = np.zeros(len(ANNOTATION_BUDGETS), dtype=float)
+    candor_imperfect = np.zeros(len(ANNOTATION_BUDGETS), dtype=float)
+
+    m_idx=0
     for m in ANNOTATION_BUDGETS:
         # Perfect annotations
-        cis_p, candor_p = _eval_with_annotations(
-            rng=rng, dataset=dataset, budget=m, means=REWARD_MEANS, stds=REWARD_STDS
-        )
-        cis_perfect.append(cis_p)
-        candor_perfect.append(candor_p)
-
+        ann_perfect = generate_annotations(
+            factual_dataset=dataset,
+            num_annotations=m,
+            annotated_reward_means=REWARD_MEANS,
+            annotated_reward_stds=REWARD_STDS,
+            rng=rng,
+        )[np.newaxis, ...]
         # Imperfect annotations
-        cis_i, candor_i = _eval_with_annotations(
-            rng=rng, dataset=dataset, budget=m, means=imperfect_means, stds=imperfect_stds
-        )
-        cis_imperfect.append(cis_i)
-        candor_imperfect.append(candor_i)
+        ann_imperfect = generate_annotations(
+            factual_dataset=dataset,
+            num_annotations=m,
+            annotated_reward_means=imperfect_means,
+            annotated_reward_stds=imperfect_stds,
+            rng=rng,
+        )[np.newaxis, ...]
+
+        # CANDOR
+        candor_perfect[m_idx] = float(run_dr(PI_E, PI_B, dataset, annotations=ann_perfect))
+        candor_imperfect[m_idx] = float(run_dr(PI_E, PI_B, dataset, annotations=ann_imperfect))
+
+        #IS+
+        for a_idx, alpha in enumerate(ALPHA_VALS):
+            cis_perfect[a_idx, m_idx] = float(run_is_plus(
+                PI_E, PI_B, dataset, annotations=ann_perfect, alpha=alpha
+            ))
+            cis_imperfect[a_idx, m_idx] = float(run_is_plus(
+                PI_E, PI_B, dataset, annotations=ann_imperfect, alpha=alpha
+            ))
+
+        m_idx = m_idx + 1
 
     return (is_val, dr_val,
-            np.array(cis_perfect), np.array(cis_imperfect),
-            np.array(candor_perfect), np.array(candor_imperfect))
+            cis_perfect, cis_imperfect,
+            candor_perfect, candor_imperfect)
 
 
 def main():
     is_runs = np.zeros(NUM_RUNS, dtype=float)
     dr_runs = np.zeros(NUM_RUNS, dtype=float)
-    cis_perfect_runs = np.zeros((NUM_RUNS, len(ANNOTATION_BUDGETS)), dtype=float)
-    cis_imperfect_runs = np.zeros((NUM_RUNS, len(ANNOTATION_BUDGETS)), dtype=float)
+    cis_perfect_runs = np.zeros((NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
+    cis_imperfect_runs = np.zeros((NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
     candor_perfect_runs = np.zeros((NUM_RUNS, len(ANNOTATION_BUDGETS)), dtype=float)
     candor_imperfect_runs = np.zeros((NUM_RUNS, len(ANNOTATION_BUDGETS)), dtype=float)
 
@@ -131,15 +157,16 @@ def main():
         is_v, dr_v, cis_p, cis_i, candor_p, candor_i = run_once(rng)
         is_runs[r] = is_v
         dr_runs[r] = dr_v
-        cis_perfect_runs[r, :] = cis_p
-        cis_imperfect_runs[r, :] = cis_i
+        cis_perfect_runs[r, :, :] = cis_p
+        cis_imperfect_runs[r, :, :] = cis_i
         candor_perfect_runs[r, :] = candor_p
         candor_imperfect_runs[r, :] = candor_i
 
     np.savez(
-        "boxplot_data.npz",
+        "boxplot_data_alpha.npz",
         true_value=TRUE_VALUE,
         budgets=np.array(ANNOTATION_BUDGETS),
+        alphas=ALPHA_VALS,
         IS_estimates=is_runs,
         DR_estimates=dr_runs,
         CIS_perfect_estimates=cis_perfect_runs,
@@ -156,6 +183,7 @@ def main():
         "\n  CANDOR perfect:", candor_perfect_runs.shape,
         "\n  CANDOR imperfect:", candor_imperfect_runs.shape,
         "\n  budgets:", ANNOTATION_BUDGETS,
+        "\n  alphas:", ALPHA_VALS,
         "\n  TRUE_VALUE:", TRUE_VALUE,
     )
 

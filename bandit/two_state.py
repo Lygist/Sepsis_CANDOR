@@ -324,8 +324,10 @@ def run_is_plus(
     pi_b: np.ndarray,
     dataset: list[Trajectory],
     annotations: np.ndarray,
+    alpha: float = 0.5,
     bx: int = 0,
-    dtype=np.float32
+    dtype=np.float32,
+    source_weights: Optional[np.ndarray] = None
 ) -> Union[float, np.ndarray]:
     """
     C-IS (IS+) with per-sample weights in a 2-action bandit.
@@ -353,7 +355,7 @@ def run_is_plus(
     rewards_factual = np.stack([tr.rewards for tr in dataset], axis=0)  # (n_samples, n_timesteps)
 
     # collapse multiple sets of annotations, if any. Shape (M, B, T, A)
-    ann_mean = collapse_annotations(annotations)
+    ann_mean = collapse_annotations(annotations, source_weights=source_weights)
     # Per-sample weights
     actions_cf = 1 - actions_factual                                     # (n_samples, n_timesteps)
     # for each (i,t), get ann_available[i,t,actions_cf[i,t]]
@@ -365,9 +367,9 @@ def run_is_plus(
     # only works for 2-action bandit
     weights = np.zeros((n_samples, n_timesteps, n_actions), dtype=float)
     # the factual reward gets weight 0.5 if CF is available at this state and weight 1.0 otherwise
-    weights[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_factual] = np.where(cf_available, 0.5, 1.0)
+    weights[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_factual] = np.where(cf_available, (1-alpha), 1.0)
     # the CF reward gets weight 0.5 if CF is available at this state and weight 0.0 otherwise
-    weights[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_cf] = np.where(cf_available, 0.5, 0.0)
+    weights[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_cf] = np.where(cf_available, alpha, 0.0)
 
     # ----------------------------
     # Estimate bar_W(a|s,a')
@@ -439,6 +441,7 @@ def run_dr(
     n_fold: int = 2,
     bx: int = 0,
     dtype=np.float32,
+    source_weights: Optional[np.ndarray] = None
 ) -> Union[float, np.ndarray]:
     """
     Doubly Robust (DR) with K-fold cross-fitting.
@@ -470,7 +473,7 @@ def run_dr(
     states = np.stack([u[0] for u in unpacked], axis=0)                            # (batch, T)
 
     # collapse annotations if multiple
-    ann_mean = collapse_annotations(annotations)
+    ann_mean = collapse_annotations(annotations, source_weights=source_weights)
 
     # Split indices into K folds
     fold_indices = np.array_split(np.arange(n), n_fold)
