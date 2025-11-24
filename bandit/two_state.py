@@ -88,7 +88,13 @@ def generate_dataset_of_trajectories(
             rng.normal(reward_means[state, action], reward_stds[state, action])
                 for state, action in zip(states, actions)])
 
-        trajectories.append(Trajectory(states, actions, rewards))
+        trajectories.append(Trajectory(
+            states,
+            actions,
+            rewards,
+            num_possible_states=num_states,
+            num_possible_actions=num_actions
+        ))
 
     return trajectories
 
@@ -128,29 +134,36 @@ def generate_annotations(
     # Pc[x_i, a_i]). This is fine for the 2-state scenario, but we will want to
     # modify this behavior if we need to generalize this code to multi-action
     # scenarios.
-    all_annotations = []
+    num_trajectories = len(factual_dataset)
+    num_timesteps = len(factual_dataset[0])
+    num_actions = factual_dataset[0].num_possible_actions
+    all_annotations = np.full((num_trajectories, num_timesteps, num_actions), np.nan)
 
-    num_timesteps = len(factual_dataset[0])  # Assuming equal length trajectories
+    # Construct a Pool of all possible counterfactual actions
+    cf_pool = []
 
-    # If we ever venture outside the 2-state problem, we'll need to factor in the number of actions.
-    max_possible_annotations = num_timesteps * len(factual_dataset)
-    num_annotations = np.minimum(num_annotations, max_possible_annotations)
-    indices_to_annotate = set(rng.choice(max_possible_annotations, size=num_annotations, replace=False))
+    for i, traj in enumerate(factual_dataset):
+        states, actions, _ = traj.unpack()
+        for t in range(num_timesteps):
+            factual_a = actions[t]
+            for a in range(num_actions):
+                if a != factual_a:
+                    cf_pool.append((i, t, a, states[t])) #(traj_idx, timestep, cf_action, state)
 
-    total_timesteps_processed = 0
-    for trajectory in factual_dataset:
-        # Generate the annotations for all flagged timesteps
-        counterfac_rewards = np.full((num_timesteps, 2), np.nan)
-        for timestep, state, action, _ in trajectory:
-            if total_timesteps_processed in indices_to_annotate:
-                counterfac_rewards[timestep, 1 - action] = rng.normal(
-                    annotated_reward_means[state, 1 - action],
-                    annotated_reward_stds[state, 1 - action])
-            total_timesteps_processed += 1
+    # Sample CFs from the pool based on budget
+    max_possible = len(cf_pool)
+    actual_budget = np.minimum(num_annotations, max_possible)
+    chosen_indices = rng.choice(max_possible, size=actual_budget, replace=False)
 
-        all_annotations.append(counterfac_rewards)
+    # Generate values for selected CFs
+    for idx in chosen_indices:
+        traj_idx, t, a, s = cf_pool[idx]
+        # Generate reward based on the specific (state, action) mean/std
+        mean = annotated_reward_means[s, a]
+        std = annotated_reward_stds[s, a]
+        all_annotations[traj_idx, t, a] = rng.normal(mean, std)
 
-    return np.array(all_annotations)
+    return all_annotations
 
 
 def collapse_annotations(
@@ -347,8 +360,7 @@ def run_is_plus(
     n_samples = len(dataset)
     n_timesteps = dataset[0].states.shape[0] if n_samples > 0 else 0
     n_states, n_actions = pi_b.shape
-    if n_actions != 2:
-        raise ValueError("This implementation assumes a 2-action bandit.")
+
 
     states = np.stack([tr.states for tr in dataset], axis=0)            # (n_samples, n_timesteps)
     actions_factual = np.stack([tr.actions for tr in dataset], axis=0)  # (n_samples, n_timesteps)
@@ -356,20 +368,26 @@ def run_is_plus(
 
     # collapse multiple sets of annotations, if any. Shape (M, B, T, A)
     ann_mean = collapse_annotations(annotations, source_weights=source_weights)
-    # Per-sample weights
-    actions_cf = 1 - actions_factual                                     # (n_samples, n_timesteps)
-    # for each (i,t), get ann_available[i,t,actions_cf[i,t]]
-    ann_available = (~np.isnan(annotations)).any(axis=0)                 # (n_samples, n_timesteps, n_actions)
-    cf_available = ann_available[np.arange(n_samples)[:, None],
-                                 np.arange(n_timesteps)[None, :],
-                                 actions_cf]                             # (n_samples, n_timesteps)
 
-    # only works for 2-action bandit
+    # ----------------------------
+    # Calculate Weights
+    # ----------------------------
+    # Count number of CF annotations (K)
+    is_annotated = ~np.isnan(ann_mean)
+    k_counts = np.sum(is_annotated, axis=2)
     weights = np.zeros((n_samples, n_timesteps, n_actions), dtype=float)
-    # the factual reward gets weight 0.5 if CF is available at this state and weight 1.0 otherwise
-    weights[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_factual] = np.where(cf_available, (1-alpha), 1.0)
-    # the CF reward gets weight 0.5 if CF is available at this state and weight 0.0 otherwise
-    weights[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_cf] = np.where(cf_available, alpha, 0.0)
+
+    # For factual actions: If K > 0, weight is 1-alpha. If K == 0, weight is 1.0.
+    w_factual_vals = np.where(k_counts > 0, 1.0 - alpha, 1.0)
+    batch_idx = np.arange(n_samples)[:, None]  # (N, 1)
+    time_idx = np.arange(n_timesteps)[None, :]  # (1, T)
+    weights[batch_idx, time_idx, actions_factual] = w_factual_vals
+
+    # For CF actions, weight = alpha / K.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        w_cf_vals = np.where(k_counts > 0, alpha / k_counts, 0.0)
+
+    weights = np.where(is_annotated, w_cf_vals[..., None], weights)
 
     # ----------------------------
     # Estimate bar_W(a|s,a')
@@ -416,7 +434,7 @@ def run_is_plus(
     c[np.arange(n_samples)[:, None], np.arange(n_timesteps)[None, :], actions_factual] = rewards_factual
     # inner: fill the non-factuals by the ann_mean (ann_mean can be NAN)
     # outer: use the combined rewards if annotations are available, else use the factual rewards
-    c = np.where(ann_available, np.where(np.isnan(c), ann_mean, c), c)
+    c = np.where(is_annotated, np.where(np.isnan(c), ann_mean, c), c)
 
     # ----------------------------
     # Calculate the estimate per-trajectory
@@ -439,6 +457,7 @@ def run_dr(
     dataset: list[Trajectory],
     annotations: Optional[np.ndarray] = None,  # (M, batch, T, A) or None
     n_fold: int = 2,
+    alpha: float = 0.5,
     bx: int = 0,
     dtype=np.float32,
     source_weights: Optional[np.ndarray] = None
@@ -454,6 +473,7 @@ def run_dr(
         dataset: list of Trajectory objects (each has .unpack() and .create_nan_expanded_rewards())
         annotations: optional counterfactual annotations of shape (M, batch, T, A)
         n_fold: number of folds (>=2)
+        alpha: Weight for counterfactual annotations in R_hat estimation. Factuals get weight (1-alpha). Range [0, 1].
         bx: if 0, return a scalar array [mean]; else return per-trajectory estimates
         dtype: output dtype
 
@@ -492,9 +512,13 @@ def run_dr(
         train_rewards = np.stack([factual_rewards[i] for i in idx], axis=0)     # (b_tr, T, A)
         if ann_mean is None:
             combined_rewards = np.expand_dims(train_rewards, 0)   # (1, b_tr, T, A)
+            combined_weights = np.ones_like(combined_rewards)
         else:
             ann_tr = ann_mean[idx, :, :]  # (b_tr, T, A)
             combined_rewards = np.stack([train_rewards, ann_tr], axis=0)    # (2, b_tr, T, A)
+
+            w_vec = np.array([1.0 - alpha, alpha], dtype=float).reshape(2, 1, 1, 1)
+            combined_weights = np.broadcast_to(w_vec, combined_rewards.shape)
 
         train_states  = states[idx]                                             # (b_tr, T)
         # Broadcast states to shape (1, b_tr, T, 1) for masking by state
@@ -502,34 +526,37 @@ def run_dr(
 
         # Accumulate SUM and COUNT for each (s,a), then take the ratio (safe divide).
         r_sum = np.zeros((num_states, num_actions), dtype=np.float64)
-        r_cnt = np.zeros((num_states, num_actions), dtype=np.int64)
+        r_weight_sum = np.zeros((num_states, num_actions), dtype=np.float64)
 
         # Per-state accumulation
         for s in range(num_states):
             mask_s = (states_broadcast == s)                              # (1(+M), b_tr, T, 1)
             vals_s = np.where(mask_s, combined_rewards, np.nan)           # (1(+M), b_tr, T, A)
 
-            sum_sa = np.nansum(vals_s, axis=(0, 1, 2))                    # (A,)
-            cnt_sa = np.sum(~np.isnan(vals_s), axis=(0, 1, 2))            # (A,)
+            valid_mask = ~np.isnan(vals_s)
+            weights_s = np.where(valid_mask, combined_weights, 0.0)
+
+            sum_sa = np.nansum(vals_s * weights_s, axis=(0, 1, 2))        # \sum(r*w)
+            w_sum_sa = np.sum(weights_s, axis=(0, 1, 2))                  # \sum(w)
 
             r_sum[s, :] = sum_sa
-            r_cnt[s, :] = cnt_sa
+            r_weight_sum[s, :] = w_sum_sa
 
         # Compute r_hat with the safe divide
         with np.errstate(divide='ignore', invalid='ignore'):
-            r_hat = r_sum / np.maximum(r_cnt, 1)
+            r_hat = r_sum / r_weight_sum
 
         # ---- Vectorized fallback for unseen (s,a) ----
-        unseen = (r_cnt == 0)   # Mask of unseen (s,a)
+        unseen = (r_weight_sum == 0)   # Mask of unseen (s,a)
         if np.any(unseen):
             # Global action means across all states (where seen)
             with np.errstate(divide='ignore', invalid='ignore'):
                 global_sum_a = np.nansum(r_sum, axis=0)   # (A,)
-                global_cnt_a = np.sum(r_cnt, axis=0)      # (A,)
-                global_mean_a = global_sum_a / np.maximum(global_cnt_a, 1)
+                global_w_sum_a = np.sum(r_weight_sum, axis=0)      # (A,)
+                global_mean_a = global_sum_a / global_w_sum_a
 
             # Build fallback per action; if an action is never seen anywhere, fall back to 0.0
-            fallback = np.where(global_cnt_a > 0, global_mean_a, 0.0)      # (A,)
+            fallback = np.nan_to_num(global_mean_a, nan=0.0)     # (A,)
             # Assign only where unseen
             r_hat[unseen] = fallback[np.nonzero(unseen)[1]]
 

@@ -11,38 +11,45 @@ from two_state import (
 # ======================
 # Experiment controls
 # ======================
-MASTER_SEED = 20250925
+MASTER_SEED = 20251124
 RNG_MASTER = np.random.default_rng(MASTER_SEED)
 
 NUM_RUNS = 100
-TRAJ_PER_RUN = 100
+TRAJ_PER_RUN = 400
 TRAJ_LEN = 1  # bandit
 
-ANNOTATION_BUDGETS = [20, 40, 60, 80, 100]
+ANNOTATION_BUDGETS = [40, 80, 120, 160, 200]
 
 ALPHA_VALS = [0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 
 # ======================
 # Environment / policies
 # ======================
-STATE_PROBS = np.array([0.5, 0.5])  # 2-state, 2-action
-REWARD_MEANS = np.array([[3.0, 5.0],
-                         [1.5, -1.5]])
-REWARD_STDS  = np.array([[8.0, 6.0],
-                         [6.0, 8.0]])
+STATE_PROBS = np.array([0.33, 0.33, 0.34]) # 3-state, 5-action
 
-PI_B = np.array([[0.80, 0.20],
-                 [0.20, 0.80]])
-PI_E = np.array([[0.15, 0.85],
-                 [0.85, 0.15]])
+REWARD_MEANS = abs(np.random.normal(3,1,(3,5)))
+
+REWARD_STDS = np.random.lognormal(1,0.5,(3,5))
+
+PI_B = np.array([
+    [0.8, 0.05, 0.05, 0.05, 0.05],
+    [0.05, 0.05, 0.8, 0.05, 0.05],
+    [0.05, 0.05, 0.05, 0.05, 0.8]
+])
+
+PI_E = np.array([
+    [0.1, 0.6, 0.1, 0.1, 0.1],
+    [0.1, 0.6, 0.1, 0.1, 0.1],
+    [0.6, 0.1, 0.1, 0.1, 0.1]
+])
 
 TRUE_VALUE = calculate_true_policy_value(PI_E, STATE_PROBS, REWARD_MEANS)
 
 # ======================
 # Imperfect annotation parameters (global)
 # ======================
-IMP_ANNOT_BIAS = 0.75      # additive mean bias for imperfect annotations
-IMP_ANNOT_STD_ADD = 0.2    # additional std added for imperfect annotations
+IMP_ANNOT_BIAS = -0.75      # additive mean bias for imperfect annotations
+IMP_ANNOT_STD_ADD = 0.3    # additional std added for imperfect annotations
 
 
 def _eval_with_annotations(rng, dataset, budget, means, stds):
@@ -102,8 +109,8 @@ def run_once(rng):
     cis_perfect = np.zeros((len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
     cis_imperfect = np.zeros((len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
 
-    candor_perfect = np.zeros(len(ANNOTATION_BUDGETS), dtype=float)
-    candor_imperfect = np.zeros(len(ANNOTATION_BUDGETS), dtype=float)
+    candor_perfect = np.zeros((len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
+    candor_imperfect = np.zeros((len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
 
     m_idx=0
     for m in ANNOTATION_BUDGETS:
@@ -124,16 +131,21 @@ def run_once(rng):
             rng=rng,
         )[np.newaxis, ...]
 
-        # CANDOR
-        candor_perfect[m_idx] = float(run_dr(PI_E, PI_B, dataset, annotations=ann_perfect))
-        candor_imperfect[m_idx] = float(run_dr(PI_E, PI_B, dataset, annotations=ann_imperfect))
-
-        #IS+
+        # Loop over Alphas
         for a_idx, alpha in enumerate(ALPHA_VALS):
+            # --- IS+ (C-IS) ---
             cis_perfect[a_idx, m_idx] = float(run_is_plus(
                 PI_E, PI_B, dataset, annotations=ann_perfect, alpha=alpha
             ))
             cis_imperfect[a_idx, m_idx] = float(run_is_plus(
+                PI_E, PI_B, dataset, annotations=ann_imperfect, alpha=alpha
+            ))
+
+            # --- CANDOR (Weighted DR) ---
+            candor_perfect[a_idx, m_idx] = float(run_dr(
+                PI_E, PI_B, dataset, annotations=ann_perfect, alpha=alpha
+            ))
+            candor_imperfect[a_idx, m_idx] = float(run_dr(
                 PI_E, PI_B, dataset, annotations=ann_imperfect, alpha=alpha
             ))
 
@@ -149,8 +161,8 @@ def main():
     dr_runs = np.zeros(NUM_RUNS, dtype=float)
     cis_perfect_runs = np.zeros((NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
     cis_imperfect_runs = np.zeros((NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
-    candor_perfect_runs = np.zeros((NUM_RUNS, len(ANNOTATION_BUDGETS)), dtype=float)
-    candor_imperfect_runs = np.zeros((NUM_RUNS, len(ANNOTATION_BUDGETS)), dtype=float)
+    candor_perfect_runs = np.zeros((NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
+    candor_imperfect_runs = np.zeros((NUM_RUNS, len(ALPHA_VALS), len(ANNOTATION_BUDGETS)), dtype=float)
 
     for r in range(NUM_RUNS):
         rng = np.random.default_rng(RNG_MASTER.integers(0, 2**31 - 1))  # independent RNG per run
@@ -159,11 +171,11 @@ def main():
         dr_runs[r] = dr_v
         cis_perfect_runs[r, :, :] = cis_p
         cis_imperfect_runs[r, :, :] = cis_i
-        candor_perfect_runs[r, :] = candor_p
-        candor_imperfect_runs[r, :] = candor_i
+        candor_perfect_runs[r, :, :] = candor_p
+        candor_imperfect_runs[r, :, :] = candor_i
 
     np.savez(
-        "boxplot_data_alpha.npz",
+        "boxplot_data_alpha_3s5a.npz",
         true_value=TRUE_VALUE,
         budgets=np.array(ANNOTATION_BUDGETS),
         alphas=ALPHA_VALS,
